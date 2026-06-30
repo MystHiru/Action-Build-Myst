@@ -997,7 +997,7 @@ jobs:
           sed -i '/endmenu/i source "drivers/rekernel/Kconfig"' drivers/Kconfig
           sed -i '$a \#Re-Kernel Support\nobj-$(CONFIG_REKERNEL) += rekernel/' drivers/Makefile
           mkdir -p drivers/rekernel
-          cp ${RE_DIR}/rekernel_*.c ${RE_DIR}/rekernel.h ${RE_DIR}/Makefile ${RE_DIR}/Kconfig drivers/rekernel/
+          cp -r "${RE_DIR}"/* drivers/rekernel/
 
       - name: Apply DROID_SPACES
         env:

@@ -56,19 +56,12 @@ on:
           - oneplus_turbo_6
           - oneplus_nord_6
           - oneplus_ace_6t
-          - oneplus_ace_6t_Canary
           - oneplus_15r
-          - oneplus_15r_Canary
           - oneplus_15
-          - oneplus_15_Canary
           - oneplus_15t
-          - oneplus_15t_Canary
           - oneplus_pad_3_pro
-          - oneplus_pad_3_pro_Canary
           - oneplus_pad_4
-          - oneplus_pad_4_Canary
           - oneplus_ace6_ultra
-          - oneplus_ace6_ultra_Canary
       MANAGER_SOURCE:
         type: choice
         description: "管理器调用方向//Manager download source"
@@ -282,6 +275,8 @@ jobs:
           echo "MANIFEST_REPO_NAME=$FOUND_REPO_NAME" >> "$GITHUB_ENV"
           echo "MANIFEST_BRANCH=$FOUND_BRANCH" >> "$GITHUB_ENV"
 
+          # 回退未公开项
+          sed -i -e '/prebuilts\/asuite"/{/ks-kernel\.lnx\.5\.0\.r3-rel/d}' -e '/tools\/tradefederation\/prebuilts"/{/ks-kernel\.lnx\.5\.0\.r3-rel/d}' "$XML_PATH"
           # 解析 revision 字符串
           REVISION=$(grep -oP '<project[^>]+revision="\K[^"]+' "$XML_PATH" | head -n1 || true)
           echo "解析 FILE 获取 CPU 和 ANDROID_VERSION..."

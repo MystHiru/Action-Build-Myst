@@ -61,14 +61,6 @@ on:
           - oneplus_pad_3_pro
           - oneplus_pad_4
           - oneplus_ace6_ultra
-      MANAGER_SOURCE:
-        type: choice
-        description: "管理器调用方向//Manager download source"
-        required: true
-        default: OFFICIAL
-        options:
-          - OFFICIAL
-          - SPOOF
       SUSFS_CI:
         type: choice
         description: "SUSFS模块下载调用方向//SUSFS module branch"
@@ -102,6 +94,11 @@ on:
         description: "自定义构建时间(输入F使用UTCT或-1关闭)//Custom build time (Enter F to use UTCT, or -1 to disable)"
         required: false
         default: "Fri Dec 12 11:37:03 UTC 2025"
+      KSU_META:
+        type: string
+        description: "管理器分支名(必填)/内置分支名(必填)/回退分支提交哈希版本(留空不修改)//Manager Branch name (Required) / Builtin branch name (Required) / Rollback branch commit hash version (Leave blank to not modify)"
+        required: false
+        default: "dev/dev-susfs/"
       LZ4_UPDATE:
         type: boolean
         description: "是否升级LZ4到上游最新？//Upgrade LZ4 to the latest upstream?"
@@ -321,10 +318,10 @@ jobs:
           echo "Selected ANDROID_VERSION: ${{ env.ANDROID_VERSION }}"
           echo "Selected BUILD_METHOD: ${{ env.BUILD_METHOD }}"
           echo "Selected FILE: ${{ github.event.inputs.FILE }}"
-          echo "Selected MANAGER_SOURCE: ${{ github.event.inputs.MANAGER_SOURCE }}"
           echo "Selected SUSFS_CI: ${{ github.event.inputs.SUSFS_CI }}"
           echo "Selected KPM: ${{ github.event.inputs.KPM }}"
           echo "Custom SUSFS_META: ${{ github.event.inputs.SUSFS_META }}"
+          echo "Custom KSU_META: ${{ github.event.inputs.KSU_META }}"
           echo "Selected ZRAM: ${{ github.event.inputs.ZRAM }}"
           echo "Selected LSM_BBG: ${{ github.event.inputs.LSM_BBG }}"
           echo "Selected NETFILTER: ${{ github.event.inputs.NETFILTER }}"
@@ -711,32 +708,32 @@ jobs:
             chmod +x "$f"
           done
 
-      - name: Resolve Manager Source
-        id: manager
-        run: |
-          MANAGER_SOURCE="${{ github.event.inputs.MANAGER_SOURCE }}"
-
-          case "$MANAGER_SOURCE" in
-            SPOOF)
-              BRANCH="dev"
-              ARTIFACT="manager-spoofed"
-              ;;
-            OFFICIAL|*)
-              BRANCH="dev"
-              ARTIFACT="manager"
-              ;;
-          esac
-
-          echo "manager_branch=$BRANCH" >> "$GITHUB_OUTPUT"
-          echo "manager_artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
-
       - name: Add KernelSU Next
         run: |
           cd kernel_workspace/kernel_platform
-          MANAGER_BRANCH="${{ steps.manager.outputs.manager_branch }}"
-          curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/${MANAGER_BRANCH}/kernel/setup.sh" | bash -s dev-susfs
-          cd KernelSU-Next
-          KSU_VERSION=$(expr $(curl -sI "https://api.github.com/repos/pershoot/KernelSU-Next/commits?sha=${MANAGER_BRANCH}&per_page=1" | grep -i "link:" | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p') "+" 30000)
+          KSU_META="${{ github.event.inputs.KSU_META }}"
+
+          # 必须包含两个分隔符（至少三个字段）
+          if [[ "$(grep -o '/' <<< "$KSU_META" | wc -l)" -lt 2 ]]; then
+            echo "错误: KSU_META 参数缺少必要的分隔符 '/'，格式应为: 管理器分支名/内置分支名/提交hash(可省略)"
+            exit 10
+          fi
+
+          # 解析字段：分支 / 自定义标识 / 手动 hash
+          IFS='/' read -r KSU_MANAGER_BRANCH KSU_BUILTIN_BRANCH MANUAL_HASH <<< "$KSU_META"
+          echo "KSU_MANAGER_BRANCH=$KSU_MANAGER_BRANCH" >> $GITHUB_ENV
+          echo "KSU_BUILTIN_BRANCH=$KSU_BUILTIN_BRANCH" >> $GITHUB_ENV
+          [[ -n "$MANUAL_HASH" ]] && echo "手动指定 hash: $MANUAL_HASH" || echo "手动指定 hash: 未启用"
+
+          curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/${KSU_MANAGER_BRANCH}/kernel/setup.sh" | bash -s "$KSU_BUILTIN_BRANCH"
+          cd ./KernelSU-Next
+
+          if [[ -n "$MANUAL_HASH" ]]; then
+            git fetch origin "$KSU_BUILTIN_BRANCH" --depth=50
+            git checkout "$MANUAL_HASH"
+          fi
+
+          KSU_VERSION=$(expr $(curl -sI "https://api.github.com/repos/pershoot/KernelSU-Next/commits?sha=${KSU_MANAGER_BRANCH}&per_page=1" | grep -i "link:" | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p') "+" 30000)
           echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
           sed -i "s/KSU_VERSION_FALLBACK := 1/KSU_VERSION_FALLBACK := $KSU_VERSION/g" kernel/Kbuild
           KSU_GIT_TAG=$(curl -sL "https://api.github.com/repos/KernelSU-Next/KernelSU-Next/tags" | grep -o '"name": *"[^"]*"' | head -n 1 | sed 's/"name": "//;s/"//')
@@ -1463,16 +1460,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          MANAGER_BRANCH="${{ steps.manager.outputs.manager_branch }}"
-          MANAGER_ARTIFACT="${{ steps.manager.outputs.manager_artifact }}"
+          MANAGER_ARTIFACT=manager
 
-          echo "Using branch: $MANAGER_BRANCH"
+          echo "Using branch: $KSU_MANAGER_BRANCH"
           echo "Downloading artifact: $MANAGER_ARTIFACT"
 
-          run_id=$(gh api "repos/KernelSU-Next/KernelSU-Next/actions/workflows/build-manager-ci.yml/runs?branch=$MANAGER_BRANCH&status=success&per_page=1" --jq '.workflow_runs[0].id' || echo "")
+          run_id=$(gh api "repos/KernelSU-Next/KernelSU-Next/actions/workflows/build-manager-ci.yml/runs?branch=$KSU_MANAGER_BRANCH&status=success&per_page=1" --jq '.workflow_runs[0].id' || echo "")
 
           if [[ -z "$run_id" ]]; then
-            echo "No successful workflow run found on branch $MANAGER_BRANCH. Skipping download."
+            echo "No successful workflow run found on branch $KSU_MANAGER_BRANCH. Skipping download."
             exit 0
           fi
           artifact_url=$(gh api "repos/KernelSU-Next/KernelSU-Next/actions/runs/$run_id/artifacts" | jq -r ".artifacts[] | select(.name == \"$MANAGER_ARTIFACT\") | .archive_download_url" | head -n1)

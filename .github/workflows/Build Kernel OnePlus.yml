@@ -850,6 +850,9 @@ jobs:
           sed -i '$a \#Re-Kernel Support\nobj-$(CONFIG_REKERNEL) += rekernel/' drivers/Makefile
           mkdir -p drivers/rekernel
           cp -r "${RE_DIR}"/* drivers/rekernel/
+          if [ -f BUILD.bazel ]; then
+            sed -i '/"kernel_aarch64": {/,/"kernel_aarch64_16k": {/ s|"module_implicit_outs": get_gki_modules_list("arm64")|"module_implicit_outs": get_gki_modules_list("arm64") + ["drivers/rekernel/rekernel.ko"]|' BUILD.bazel
+          fi
 
       - name: Apply DROID_SPACES
         env:

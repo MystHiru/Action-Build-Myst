@@ -997,6 +997,9 @@ jobs:
         run: |
           cd kernel_workspace/kernel_platform/common
           CONFIG_FILE=./arch/arm64/configs/gki_defconfig
+          MAKEFILE=./kernel/Makefile
+
+          declare -a HIDE_CONFIGS=()
 
           set_config() {
             local val="$1"
@@ -1010,6 +1013,29 @@ jobs:
               printf '%s\n' "$val" >> "$CONFIG_FILE"
             fi
           }
+
+          set_hide_config() {
+            local val="$1"
+            local key="${val%%=*}"
+            set_config "$val"
+            HIDE_CONFIGS+=("$key")
+          }
+
+          inject_fake_config() {
+            [ "${#HIDE_CONFIGS[@]}" -eq 0 ] && return 0
+            local marker="# --- fake_config injector ---"
+            if ! grep -qF "$marker" "$MAKEFILE"; then
+              {
+                printf '\n%s\n' "$marker"
+                printf 'ifneq ($(strip $(CONFIG_FAKE_DISABLE)),)\n'
+                printf '$(obj)/config_data: $(KCONFIG_CONFIG) FORCE\n'
+                printf '\t$(Q)sed $(foreach opt,$(CONFIG_FAKE_DISABLE),-e '"'"'s|^$(opt)=.*|# $(opt) is not set|'"'"') $(KCONFIG_CONFIG) > $@\n'
+                printf 'endif\n'
+              } >> "$MAKEFILE"
+            fi
+            echo "CONFIG_FAKE_DISABLE=${HIDE_CONFIGS[*]}" >> "$GITHUB_ENV"
+          }
+          trap 'inject_fake_config' EXIT
 
           # KernelSU配置
           set_config "CONFIG_KSU=y"
@@ -1044,7 +1070,7 @@ jobs:
 
           # BBR & ECN配置*
           if [ "${{ github.event.inputs.CCM }}" = "true" ]; then
-            set_config "CONFIG_TCP_CONG_ADVANCED=y"
+            set_hide_config "CONFIG_TCP_CONG_ADVANCED=y"
             set_config "CONFIG_TCP_CONG_BBR=y"
             set_config "CONFIG_NET_SCH_FQ=y"
             set_config "CONFIG_TCP_CONG_BIC=n"
@@ -1116,7 +1142,7 @@ jobs:
             set_config "CONFIG_IP_SET_HASH_NETPORT=y"
             set_config "CONFIG_IP_SET_HASH_NETIFACE=y"
             set_config "CONFIG_IP_SET_LIST_SET=y"
-            set_config "CONFIG_IP6_NF_NAT=y"
+            set_hide_config "CONFIG_IP6_NF_NAT=y"
             set_config "CONFIG_IP6_NF_TARGET_MASQUERADE=y"
             set_config "CONFIG_NETFILTER_XT_TARGET_HL=y"
             set_config "CONFIG_IP_NF_TARGET_TTL=y"
@@ -1132,18 +1158,6 @@ jobs:
           if [[ "$ENABLE_RUST" == "true" ]]; then
             set_config "CONFIG_RUST=y"
             set_config "CONFIG_ANDROID_BINDER_IPC_RUST=m"
-          fi
-
-      - name: Fix IPv6_NAT Error
-        if: ${{ github.event.inputs.NETFILTER == 'true' }}
-        run: |
-          PATCH_DIR="${GITHUB_WORKSPACE}/kernel_workspace/Action-Build/patches"
-          cd kernel_workspace/kernel_platform/common
-          if [[ "${CPU}" == sm* ]]; then
-            echo "修复启用IPv6 NAT后可能出现的设备误报…"
-            patch -p1 -F 3 < "${PATCH_DIR}/IPv6_NAT_FIX.patch"
-          else
-            echo "你的设备不支持 IPv6 NAT，跳过此步骤。"
           fi
 
       # Custom kernel build time, without adding #1 SMP PREEMPT 自定义内核构建时间，不要加入#1 SMP PREEMPT
@@ -1352,6 +1366,9 @@ jobs:
             KCPPFLAGS="$KCPPFLAGS"
           )
 
+          if [[ -n "${CONFIG_FAKE_DISABLE:-}" ]]; then
+            MAKE_ARGS+=(CONFIG_FAKE_DISABLE="$CONFIG_FAKE_DISABLE")
+          fi
           if [[ -n "$LD_WRAPPER" ]]; then
             MAKE_ARGS+=(LD="$LD_WRAPPER")
           else
